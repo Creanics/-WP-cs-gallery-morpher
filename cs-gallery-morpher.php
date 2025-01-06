@@ -1,10 +1,12 @@
 <?php
 /**
- * Plugin Name: CS_GalleryMorpher
+ * Plugin Name: CS GalleryMorpher
  * Description: A WordPress plugin to transform and migrate image galleries.
  * Version: 1.0.0
  * Author: Cyprien Siaud
  */
+
+require_once(plugin_dir_path(__FILE__).'/includes/class-morpher.php');
 
 // Créez le menu dans le tableau de bord admin
 add_action('admin_menu', 'galmorph_add_admin_menu');
@@ -53,13 +55,19 @@ function galmorph_render_admin_page() {
     if (isset($_POST['migrate'])) {
         $from = sanitize_text_field($_POST['from']);
         $to = sanitize_text_field($_POST['to']);
-
-        if (function_exists($function_1)) {
-            $function_1();
-        }
-
-        if (function_exists($function_2)) {
-            $function_2();
+        
+        $function = null;
+        $func_list = get_option('galmorph_func_list');
+        if(!empty($func_list) && isset($func_list[$from])){
+            if(!empty($func_list[$from]) && isset($func_list[$from][$to])){
+                $morpher = new Morpher();
+                $function = $func_list[$from][$to];
+                $morpher->$function();
+            }else{
+                echoWarn("Le plugin source \"$to\" est inconnu ou n'est pas pris en charge.");
+            }
+        }else{
+            echoWarn("Le plugin de destination \"$from\" est inconnu ou n'est pas pris en charge.");
         }
 
         echo '<div class="updated"><p>Migration exécutée avec succès.</p></div>';
