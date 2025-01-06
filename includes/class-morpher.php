@@ -4,10 +4,10 @@ require_once(plugin_dir_path(__FILE__).'/classes/modula/class-modulasettings.php
 include_once(plugin_dir_path(__FILE__).'/functions-custom.php');
 
 class Morpher {
-    private $devMode = true;
+    private $devMode = false;
     private $wpdb;
     private $url;
-    private $imgDirs = ["ngg" => "gallery/temp"];
+    private $imgDirs = ["ngg" => "gallery"];
     private $authorizedExtensions = ["jpg", "jpeg", "png"];
 
     public function __construct() {
@@ -17,19 +17,25 @@ class Morpher {
     }
 
     public function nggToModula() {
+        $postsTab = new WP_Query( array(
+            's'              => '[nggallery id=',
+            'search_columns' => array( 'post_content' ),
+        ));
         try {
-            $ngg_pictures = $this->getTableContent("ngg_pictures");
-            $ngg_galleries = $this->getTableContent("ngg_gallery");
+            $ngg_pictures = $this->getTableContent("ngg_pictures"); // Retrieving NGG Images
+            $ngg_galleries = $this->getTableContent("ngg_gallery"); // Retrieving NGG Galleries
 
-            foreach ($ngg_pictures as $picture) {
+            foreach ($ngg_pictures as $picture) { // Add images to galleries
                 $index = $this->arraySearchForId($ngg_galleries, $picture["galleryid"]);
                 if ($index !== -1) {
                     $ngg_galleries[$index]['pictures'][] = $picture;
                 }
             }
 
-            $files = $this->nggMoveFiles();
-            $files = $this->saveFiles($files); // [["id"=>1, "filename"=>"/var/.../image.jpg"]]
+            if(!$this->devMode){
+                $files = $this->nggMoveFiles(); // Move files from /gallery to /uploads
+                $files = $this->saveFiles($files); // Save moved files in database => [["id"=>1, "filename"=>"/var/.../image.jpg"]] 
+            }
 
             $post_data_base = [
                 "post_title"    => '',
@@ -39,41 +45,74 @@ class Morpher {
             ];
             $newGalleries = [];
             $modulaSettings = new ModulaSettings();
-            foreach ($ngg_galleries as $oldGallery) {
+            foreach ($ngg_galleries as $oldGallery) { // Creation of modula galleries
+                if(!isset($oldGallery['pictures'])) continue;
+                // Get information from NGG galleries to put in Modula gallery
                 $post_data = $post_data_base;
                 $title = explode("-", $oldGallery['title']);
                 $title[0] = ucfirst($title[0]);
                 $post_data['post_title'] = implode(' ', $title);
                 $post_data['name'] = $oldGallery['name'];
 
-                $gallery_id = wp_insert_post( $post_data );
+                $gallery_id = wp_insert_post( $post_data ); // Gallery creation
                 
-			    add_post_meta( $gallery_id, 'modula-settings', $modulaSettings->get(), true );
+			    add_post_meta( $gallery_id, 'modula-settings', $modulaSettings->get(), true ); // Set predefined options to gallery
                 
-                $img_tab = $oldGallery['pictures'];
+                if(!$this->devMode){
+                    $img_tab = $oldGallery['pictures'];
 
-                foreach ($img_tab as $base_img) {
-                    $base_filename = basename($base_img['filename']);
-                    $base_alt = basename($base_img['alttext']);
+                    foreach ($img_tab as $base_img) { // Add images in corresponding gallery
+                        $base_filename = basename($base_img['filename']);
+                        $base_alt = basename($base_img['alttext']);
 
-                    $result = array_filter(
-                        $files, 
-                        function ($item) use($base_filename) {
-                            return basename($item['filename']) == $base_filename;
-                        }
-                    );
-                    $new_img_id = $result[0]['id']; // Id récupéré de l'insertion
-                    $new_img_filename = $result[0]['id']; // Filename récupéré de l'insertion
-                    $img = new ModulaImage($new_img_filename, $new_img_id, $base_alt);
-                    $img->save($gallery_id);
+                        $result = array_filter(
+                            $files, 
+                            function ($item) use($base_filename) {
+                                return basename($item['filename']) == $base_filename;
+                            }
+                        );
+
+                        $result = array_values($result);
+                        
+                        $new_img_id = $result[0]['id']; // Id get from insertion
+                        $new_img_filename = $result[0]['filename']; // Filename get from insertion
+                        
+                        $img = new ModulaImage($new_img_filename, $new_img_id, $base_alt);
+                        $img->save($gallery_id);
+                    }
+                    $newGalleries[$oldGallery['gid']] = $gallery_id;
                 }
+            }
 
-                array_push($newGalleries, ["id"=>"$gallery_id"]);
+            $base_regex = "\[nggallery id=(\d+)\]";
+            foreach ($postsTab->posts as $post) {
+                $postContent = $post->post_content;
+                
+                preg_match('/'.$base_regex.'/', $postContent, $matches, PREG_OFFSET_CAPTURE);
+                while (count($matches) != 0) {
+                    $postContent = preg_replace_callback(
+                        '|'.$base_regex.'|',
+                        function ($matches) use ($newGalleries){
+                            $id = $newGalleries[$matches[1]];
+                            return '[modula id="'.$id.'"]';
+                        },
+                        $postContent
+                    );
+                    preg_match('/'.$base_regex.'/', $postContent, $matches, PREG_OFFSET_CAPTURE);
+                }
+                $post->post_content = $postContent;
+                wp_update_post($post);
             }
 
         } catch (Throwable $th) {
-            wp_die("Error: " . $th->getMessage());
+            wp_die($th);
         }
+        echo "<p>";
+        echo "Migration terminée<br>";
+        echo count($newGalleries)." Galeries ont été importées<br>";
+        // echo count($postsTab->posts)." Posts ont été mis à jour";
+        echo "</p>";
+
     }
 
     private function getTableContent(string $table) {
@@ -90,19 +129,18 @@ class Morpher {
     }
 
     private function nggMoveFiles() {
-        $source_dir = WP_CONTENT_DIR . $this->imgDirs['ngg'];
+        $source_dir = WP_CONTENT_DIR . "/" . $this->imgDirs['ngg'] . "/";
         $upload_dir = wp_get_upload_dir();
         $target_dir = $upload_dir['path'] . '/';
 
         if(!$this->devMode) wp_mkdir_p($target_dir);
-
-        $gallery_dirs = array_diff(scandir($source_dir), ['.', '..']);
+ 
+        $scandir = scandir($source_dir);
+        $gallery_dirs = array_diff($scandir, ['.', '..']);
         $finalFiles = [];
-
         foreach ($gallery_dirs as $gallery_dir) {
             $gallery_dir_path = $source_dir . $gallery_dir;
             if (!is_dir($gallery_dir_path)) continue;
-
             foreach (array_diff(scandir($gallery_dir_path), ['.', '..']) as $file) {
                 $source_file_path = $gallery_dir_path . '/' . $file;
                 if (!is_file($source_file_path)) continue;
@@ -111,7 +149,9 @@ class Morpher {
                 if (!in_array(strtolower($extension), $this->authorizedExtensions)) continue;
 
                 $target_file = $this->getUniqueFilename($target_dir, basename($file));
+                $target_file = $target_dir . $target_file;
                 if(!$this->devMode) copy($source_file_path, $target_file);
+
                 array_push($finalFiles, $target_file);
             }
         }
