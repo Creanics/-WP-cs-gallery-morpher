@@ -46,6 +46,6 @@ class ModulaImage {
     );
   }
   public function save(int $gallery_id){
-    add_post_meta( $gallery_id, 'modula-settings', $this->get(), true );
+    add_post_meta( $gallery_id, 'modula-images', $this->get(), true );
   }
 }
