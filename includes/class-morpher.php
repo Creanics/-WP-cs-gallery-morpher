@@ -21,6 +21,7 @@ class Morpher {
             's'              => '[nggallery id=',
             'search_columns' => array( 'post_content' ),
         ));
+        $postsTab = $postsTab->posts;
         try {
             $ngg_pictures = $this->getTableContent("ngg_pictures"); // Retrieving NGG Images
             $ngg_galleries = $this->getTableContent("ngg_gallery"); // Retrieving NGG Galleries
@@ -32,10 +33,8 @@ class Morpher {
                 }
             }
 
-            if(!$this->devMode){
-                $files = $this->nggMoveFiles(); // Move files from /gallery to /uploads
-                $files = $this->saveFiles($files); // Save moved files in database => [["id"=>1, "filename"=>"/var/.../image.jpg"]] 
-            }
+            $files = $this->nggMoveFiles(); // Move files from /gallery to /uploads
+            $files = $this->saveFiles($files); // Save moved files in database => [["id"=>1, "filename"=>"/var/.../image.jpg"]] 
 
             $post_data_base = [
                 "post_title"    => '',
@@ -43,7 +42,7 @@ class Morpher {
 				'post_type'     => 'modula-gallery',
 				'post_status'   => 'publish',
             ];
-            $newGalleries = [];
+            $newGaleries = [];
             $modulaSettings = new ModulaSettings();
             foreach ($ngg_galleries as $oldGallery) { // Creation of modula galleries
                 if(!isset($oldGallery['pictures'])) continue;
@@ -56,7 +55,8 @@ class Morpher {
 
                 $gallery_id = wp_insert_post( $post_data ); // Gallery creation
                 
-			    add_post_meta( $gallery_id, 'modula-settings', $modulaSettings->get(), true ); // Set predefined options to gallery
+			    // add_post_meta( $gallery_id, 'modula-settings', $modulaSettings->get(), true ); // Set predefined options to gallery
+			    add_post_meta( $gallery_id, 'modula-settings', $modulaSettings->getCreative(), true ); // Set predefined options to gallery
                 
                 if(!$this->devMode){
                     $img_tab = $oldGallery['pictures'];
@@ -67,49 +67,35 @@ class Morpher {
 
                         $result = array_filter(
                             $files, 
-                            function ($item) use($base_filename) {
+                            function ($item) use ($base_filename) {
                                 return basename($item['filename']) == $base_filename;
                             }
                         );
-
+                        
                         $result = array_values($result);
                         
-                        $new_img_id = $result[0]['id']; // Id get from insertion
-                        $new_img_filename = $result[0]['filename']; // Filename get from insertion
-                        
-                        $img = new ModulaImage($new_img_filename, $new_img_id, $base_alt);
-                        $img->save($gallery_id);
+                        try {
+                            $new_img_id = $result[0]['id']; // Id get from insertion
+                            $new_img_filename = $result[0]['filename']; // Filename get from insertion
+                            
+                            $img = new ModulaImage($new_img_filename, $new_img_id, $base_alt);
+                            $img->save($gallery_id);
+                        } catch (\Throwable $th) {
+                            wp_die($th);
+                        }
                     }
-                    $newGalleries[$oldGallery['gid']] = $gallery_id;
                 }
+                $newGaleries[$oldGallery['gid']] = $gallery_id;
             }
-
-            $base_regex = "\[nggallery id=(\d+)\]";
-            foreach ($postsTab->posts as $post) {
-                $postContent = $post->post_content;
-                
-                preg_match('/'.$base_regex.'/', $postContent, $matches, PREG_OFFSET_CAPTURE);
-                while (count($matches) != 0) {
-                    $postContent = preg_replace_callback(
-                        '|'.$base_regex.'|',
-                        function ($matches) use ($newGalleries){
-                            $id = $newGalleries[$matches[1]];
-                            return '[modula id="'.$id.'"]';
-                        },
-                        $postContent
-                    );
-                    preg_match('/'.$base_regex.'/', $postContent, $matches, PREG_OFFSET_CAPTURE);
-                }
-                $post->post_content = $postContent;
-                wp_update_post($post);
-            }
+            
+            if(!$this->devMode) $this->replaceInPosts($postsTab, $newGaleries);
 
         } catch (Throwable $th) {
             wp_die($th);
         }
         echo "<p>";
         echo "Migration terminée<br>";
-        echo count($newGalleries)." Galeries ont été importées<br>";
+        echo count($newGaleries)." Galeries ont été importées<br>";
         // echo count($postsTab->posts)." Posts ont été mis à jour";
         echo "</p>";
 
@@ -186,5 +172,27 @@ class Morpher {
         }
 
         return $finalTab;
+    }
+
+    private function replaceInPosts($posts, $galeries){
+        $base_regex = "\[nggallery id=(\d+)\]";
+        foreach ($posts as $post) {
+            $postContent = $post->post_content;
+            
+            preg_match('/'.$base_regex.'/', $postContent, $matches, PREG_OFFSET_CAPTURE);
+            while (count($matches) != 0) {
+                $postContent = preg_replace_callback(
+                    '|'.$base_regex.'|',
+                    function ($matches) use ($galeries){
+                        $id = $galeries[$matches[1]];
+                        return '[modula id="'.$id.'"]';
+                    },
+                    $postContent
+                );
+                preg_match('/'.$base_regex.'/', $postContent, $matches, PREG_OFFSET_CAPTURE);
+            }
+            $post->post_content = $postContent;
+            wp_update_post($post);
+        }
     }
 }
