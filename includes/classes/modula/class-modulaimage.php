@@ -46,6 +46,12 @@ class ModulaImage {
     );
   }
   public function save(int $gallery_id){
-    add_post_meta( $gallery_id, 'modula-images', $this->get(), true );
+    if(metadata_exists('post', $gallery_id, 'modula-images')){
+      $metaDatas = get_post_meta( $gallery_id, 'modula-images', true );
+      array_push($metaDatas, $this->get());
+      update_post_meta( $gallery_id, 'modula-images', $metaDatas );
+    }else{
+      add_post_meta( $gallery_id, 'modula-images', array($this->get()), true );
+    }
   }
 }
